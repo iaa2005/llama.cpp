@@ -1,0 +1,116 @@
+name: Build FizData (llama-server)
+
+on:
+    workflow_dispatch:
+    push:
+        branches:
+            - fix/peg-utf8-sanitizer
+        paths:
+            - "common/chat.cpp"
+
+jobs:
+    windows-vulkan:
+        runs-on: windows-2025
+        steps:
+            - uses: actions/checkout@v6
+
+            - name: Install Vulkan SDK
+              run: |
+                  curl.exe -o $env:RUNNER_TEMP\VulkanSDK.exe -L "https://sdk.lunarg.com/sdk/download/1.4.313.2/windows/vulkansdk-windows-X64-1.4.313.2.exe"
+                  & "$env:RUNNER_TEMP\VulkanSDK.exe" --accept-licenses --default-answer --confirm-command install
+                  Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\1.4.313.2"
+                  Add-Content $env:GITHUB_PATH "C:\VulkanSDK\1.4.313.2\bin"
+
+            - name: Build
+              run: |
+                  cmake -B build -G "Visual Studio 17 2022" -A x64 -DGGML_VULKAN=ON
+                  cmake --build build --config Release -j $env:NUMBER_OF_PROCESSORS
+
+            - name: Upload artifact
+              uses: actions/upload-artifact@v6
+              with:
+                  name: llama-server-win-vulkan
+                  path: build/bin/Release/llama-server.exe
+
+    windows-cpu:
+        runs-on: windows-2025
+        steps:
+            - uses: actions/checkout@v6
+
+            - name: Build
+              run: |
+                  cmake -B build -G "Visual Studio 17 2022" -A x64 -DGGML_VULKAN=OFF
+                  cmake --build build --config Release -j $env:NUMBER_OF_PROCESSORS
+
+            - name: Upload artifact
+              uses: actions/upload-artifact@v6
+              with:
+                  name: llama-server-win-cpu
+                  path: build/bin/Release/llama-server.exe
+
+    linux-vulkan:
+        runs-on: ubuntu-24.04
+        steps:
+            - uses: actions/checkout@v6
+
+            - name: Dependencies
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y build-essential libvulkan-dev glslc libssl-dev
+
+            - name: Build
+              run: |
+                  cmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
+                  cmake --build build --config Release -j $(nproc)
+
+            - name: Upload artifact
+              uses: actions/upload-artifact@v6
+              with:
+                  name: llama-server-linux-vulkan
+                  path: build/bin/llama-server
+
+    linux-cpu:
+        runs-on: ubuntu-24.04
+        steps:
+            - uses: actions/checkout@v6
+
+            - name: Build
+              run: |
+                  cmake -B build -DGGML_VULKAN=OFF -DCMAKE_BUILD_TYPE=Release
+                  cmake --build build --config Release -j $(nproc)
+
+            - name: Upload artifact
+              uses: actions/upload-artifact@v6
+              with:
+                  name: llama-server-linux-cpu
+                  path: build/bin/llama-server
+
+    release:
+        needs: [windows-vulkan, windows-cpu, linux-vulkan, linux-cpu]
+        if: github.event_name == 'workflow_dispatch'
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        steps:
+            - name: Download all artifacts
+              uses: actions/download-artifact@v7
+
+            - name: Add .exe extension and rename
+              run: |
+                  mv llama-server-win-vulkan/llama-server.exe llama-server-win-vulkan.exe
+                  mv llama-server-win-cpu/llama-server.exe llama-server-win-cpu.exe
+                  mv llama-server-linux-vulkan/llama-server llama-server-linux-vulkan
+                  mv llama-server-linux-cpu/llama-server llama-server-linux-cpu
+
+            - name: Create Release
+              uses: softprops/action-gh-release@v2
+              with:
+                  name: "llama-server (auto-build)"
+                  tag_name: "build-${{ github.run_number }}"
+                  files: |
+                      llama-server-win-vulkan.exe
+                      llama-server-win-cpu.exe
+                      llama-server-linux-vulkan
+                      llama-server-linux-cpu
+                  draft: false
+                  prerelease: true
